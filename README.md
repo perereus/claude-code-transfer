@@ -61,10 +61,15 @@ Download the latest build from the [Releases](../../releases) page:
 > The app is unsigned, so Windows SmartScreen may warn on first launch — click
 > *More info → Run anyway*. This is normal for apps without a code-signing cert.
 
-**macOS (Apple Silicon)**
+**macOS (Apple Silicon)** — ⚠️ *untested*
 - **`Claude Code Transfer_x.y.z_aarch64.dmg`** — open it and drag the app to
   `Applications`. Built automatically by GitHub Actions on a native M-series
   runner; only arm64 (M1 and later) is built, no Intel Mac support.
+
+> **The macOS build is untested.** It compiles cleanly in CI and the transfer
+> logic is cross-platform and unit-tested, but I develop on Windows and have no
+> Mac to run it on. If you try it, feedback is very welcome — please
+> [open an issue](../../issues) with what worked or broke.
 
 > The app isn't notarized (no Apple Developer account behind this project), so
 > Gatekeeper will refuse to open it with a plain double-click. Right-click the
