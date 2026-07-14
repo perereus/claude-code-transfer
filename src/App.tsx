@@ -55,9 +55,9 @@ export default function App() {
       <TitleBar />
       <ViewSwitcher tab={tab} setTab={setTab} />
       {tab === "export" ? (
-        <ExportView progress={progress} />
+        <ExportView progress={progress} resetProgress={() => setProgress(null)} />
       ) : (
-        <ImportView progress={progress} />
+        <ImportView progress={progress} resetProgress={() => setProgress(null)} />
       )}
     </div>
   );
@@ -279,7 +279,7 @@ const ghostBtn: CSSProperties = {
 };
 
 // ════════════ EXPORTAR ════════════
-function ExportView({ progress }: { progress: Progress | null }) {
+function ExportView({ progress, resetProgress }: { progress: Progress | null; resetProgress: () => void }) {
   const [projects, setProjects] = useState<ProjectInfo[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Record<string, Set<string>>>({});
@@ -296,9 +296,32 @@ function ExportView({ progress }: { progress: Progress | null }) {
   const [donePath, setDonePath] = useState<string | null>(null);
 
   useEffect(() => {
-    invoke<ProjectInfo[]>("list_projects").then(setProjects).catch((e) => setError(String(e)));
+    invoke<ProjectInfo[]>("list_projects", { exclusions: [...exclusions, ...customList] })
+      .then(setProjects)
+      .catch((e) => setError(String(e)));
     invoke<ConfigFile[]>("list_config").then(setConfigFiles).catch(() => {});
   }, []);
+
+  // refresca tamaños de carpeta al cambiar exclusiones (con debounce)
+  useEffect(() => {
+    if (!projects) return;
+    const excl = [...exclusions, ...customList];
+    const paths = projects.map((p) => p.realPath);
+    const t = setTimeout(() => {
+      invoke<number[]>("folder_sizes", { paths, exclusions: excl })
+        .then((sizes) =>
+          setProjects((ps) =>
+            ps &&
+            ps.map((p) => {
+              const i = paths.indexOf(p.realPath);
+              return i >= 0 ? { ...p, folderSize: sizes[i] } : p;
+            })
+          )
+        )
+        .catch(() => {});
+    }, 400);
+    return () => clearTimeout(t);
+  }, [exclusions, customList]);
 
   if (error)
     return <div style={{ padding: 24, color: "#e0876c" }}>Error reading projects: {error}</div>;
@@ -332,7 +355,8 @@ function ExportView({ progress }: { progress: Progress | null }) {
     selSess += n;
     if (n > 0) {
       selProj++;
-      est += (p.chatSize * n) / p.sessions.length;
+      const sel = selected[p.slug]!;
+      est += p.sessions.reduce((a, s) => (sel.has(s.id) ? a + s.size : a), 0);
       if ((includeFiles[p.slug] ?? true) && p.folderExists) est += p.folderSize;
     }
   }
@@ -366,6 +390,7 @@ function ExportView({ progress }: { progress: Progress | null }) {
         sessionIds: [...selected[p.slug]],
         includeFiles: (includeFiles[p.slug] ?? true) && p.folderExists,
       }));
+    resetProgress();
     setBusy(true);
     setDonePath(null);
     try {
@@ -588,7 +613,7 @@ function ExportView({ progress }: { progress: Progress | null }) {
 }
 
 // ════════════ IMPORTAR ════════════
-function ImportView({ progress }: { progress: Progress | null }) {
+function ImportView({ progress, resetProgress }: { progress: Progress | null; resetProgress: () => void }) {
   const [zipPath, setZipPath] = useState<string | null>(null);
   const [preview, setPreview] = useState<ArchivePreview | null>(null);
   const [resolutions, setResolutions] = useState<Record<string, ImportResolution>>({});
@@ -633,6 +658,7 @@ function ImportView({ progress }: { progress: Progress | null }) {
 
   const doImport = async () => {
     if (!zipPath) return;
+    resetProgress();
     setPhase("importing");
     setError(null);
     try {

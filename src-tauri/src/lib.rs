@@ -31,9 +31,26 @@ fn emit_progress(app: &AppHandle, message: &str, current: u64, total: u64) {
     );
 }
 
+/// Limita las emisiones a ~1 cada 80 ms (miles de archivos pequeños saturarían
+/// el IPC); la emisión final (current == total) pasa siempre.
+fn throttled_progress(app: AppHandle) -> impl FnMut(&str, u64, u64) {
+    let mut last = std::time::Instant::now() - std::time::Duration::from_secs(1);
+    move |msg: &str, cur: u64, tot: u64| {
+        if cur == tot || last.elapsed().as_millis() >= 80 {
+            last = std::time::Instant::now();
+            emit_progress(&app, msg, cur, tot);
+        }
+    }
+}
+
 #[tauri::command]
-async fn list_projects() -> Result<Vec<ProjectInfo>, String> {
-    core::list_projects(&claude_dir()?).map_err(|e| e.to_string())
+async fn list_projects(exclusions: Vec<String>) -> Result<Vec<ProjectInfo>, String> {
+    core::list_projects(&claude_dir()?, &exclusions).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn folder_sizes(paths: Vec<String>, exclusions: Vec<String>) -> Result<Vec<u64>, String> {
+    Ok(core::folder_sizes(&paths, &exclusions))
 }
 
 #[tauri::command]
@@ -58,7 +75,7 @@ async fn export_projects(
         &exclusions,
         &config_files,
         PathBuf::from(dest_path).as_path(),
-        |msg, cur, tot| emit_progress(&app, msg, cur, tot),
+        throttled_progress(app),
     )
     .map_err(|e| e.to_string())
 }
@@ -86,7 +103,7 @@ async fn import_projects(
         &home,
         &resolutions,
         &config,
-        |msg, cur, tot| emit_progress(&app, msg, cur, tot),
+        throttled_progress(app),
     )
     .map_err(|e| e.to_string())
 }
@@ -99,6 +116,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             list_projects,
             list_config,
+            folder_sizes,
             export_projects,
             inspect_archive,
             import_projects

@@ -334,22 +334,34 @@ fn project_cwd_from_sessions(dir: &Path) -> Option<String> {
     None
 }
 
-// ponytail: tamaño estimado sin dirs pesados (coincide con las exclusiones por
-// defecto); recorrerlos tarda minutos con node_modules/target grandes
-const HEAVY_DIRS: &[&str] = &["node_modules", ".git", "target", "venv", ".venv", "__pycache__", "dist"];
-
-fn dir_size(path: &Path) -> u64 {
+/// Tamaño de una carpeta respetando las exclusiones elegidas por el usuario
+/// (las carpetas excluidas se podan sin descender, para que node_modules/.git
+/// no cuesten minutos).
+pub fn dir_size(path: &Path, exclusions: &[String]) -> u64 {
     WalkDir::new(path)
         .into_iter()
         .filter_entry(|e| {
             !(e.file_type().is_dir()
-                && HEAVY_DIRS.iter().any(|h| e.file_name().to_string_lossy().eq_ignore_ascii_case(h)))
+                && exclusions
+                    .iter()
+                    .any(|x| e.file_name().to_string_lossy().eq_ignore_ascii_case(x)))
         })
         .flatten()
         .filter(|e| e.file_type().is_file())
         .filter_map(|e| e.metadata().ok())
         .map(|m| m.len())
         .sum()
+}
+
+/// Recalcula solo los tamaños de carpeta (para refrescar la UI al cambiar exclusiones).
+pub fn folder_sizes(paths: &[String], exclusions: &[String]) -> Vec<u64> {
+    paths
+        .iter()
+        .map(|p| {
+            let path = Path::new(p);
+            if path.is_dir() { dir_size(path, exclusions) } else { 0 }
+        })
+        .collect()
 }
 
 /// Archivos de la lista blanca de config que existen en este ~/.claude.
@@ -363,7 +375,7 @@ pub fn list_config(claude_dir: &Path) -> Vec<ConfigFile> {
         .collect()
 }
 
-pub fn list_projects(claude_dir: &Path) -> io::Result<Vec<ProjectInfo>> {
+pub fn list_projects(claude_dir: &Path, exclusions: &[String]) -> io::Result<Vec<ProjectInfo>> {
     let titles = history_titles(claude_dir);
     let projects_dir = claude_dir.join("projects");
     let mut result = Vec::new();
@@ -411,7 +423,7 @@ pub fn list_projects(claude_dir: &Path) -> io::Result<Vec<ProjectInfo>> {
         result.push(ProjectInfo {
             slug,
             name,
-            folder_size: if folder_exists { dir_size(folder) } else { 0 },
+            folder_size: if folder_exists { dir_size(folder, exclusions) } else { 0 },
             folder_exists,
             real_path,
             chat_size,
@@ -448,10 +460,45 @@ pub fn export_projects<F: FnMut(&str, u64, u64)>(
         .large_file(true);
 
     let mut manifest_projects = Vec::new();
-    let total = selections.len() as u64;
+
+    // pre-pase: lista concreta de trabajo para dar progreso en bytes reales.
+    // Un solo walk por proyecto; se reutiliza al escribir el zip.
+    // ponytail: sin progreso intra-archivo; si un único archivo gigante lo pide, copiar en chunks
+    let mut project_files: Vec<Vec<(PathBuf, String, u64)>> = Vec::new();
+    let mut total_bytes = 0u64;
+    for sel in selections {
+        let chat_dir = claude_dir.join("projects").join(&sel.slug);
+        for id in &sel.session_ids {
+            total_bytes += fs::metadata(chat_dir.join(format!("{id}.jsonl")))?.len();
+        }
+        let mut files = Vec::new();
+        if sel.include_files {
+            let root = Path::new(&sel.real_path);
+            for entry in WalkDir::new(root).into_iter().flatten() {
+                if !entry.file_type().is_file() {
+                    continue;
+                }
+                let rel = entry.path().strip_prefix(root).unwrap();
+                if is_excluded(rel, exclusions) {
+                    continue;
+                }
+                let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                let rel_fwd = rel.to_string_lossy().replace('\\', "/");
+                total_bytes += size;
+                files.push((entry.path().to_path_buf(), rel_fwd, size));
+            }
+        }
+        project_files.push(files);
+    }
+    for rel in config_files {
+        if CONFIG_FILES.contains(&rel.as_str()) {
+            total_bytes += fs::metadata(claude_dir.join(rel)).map(|m| m.len()).unwrap_or(0);
+        }
+    }
+    let mut done_bytes = 0u64;
 
     for (i, sel) in selections.iter().enumerate() {
-        progress(&format!("Exporting {}", sel.real_path), i as u64, total);
+        progress(&format!("Exporting {}", sel.real_path), done_bytes, total_bytes);
         let chat_dir = claude_dir.join("projects").join(&sel.slug);
         let mut sessions_meta = Vec::new();
 
@@ -461,6 +508,8 @@ pub fn export_projects<F: FnMut(&str, u64, u64)>(
             zip.start_file(format!("chats/{}/{}.jsonl", sel.slug, id), opts)
                 .map_err(io::Error::other)?;
             io::copy(&mut fs::File::open(&src)?, &mut zip)?;
+            done_bytes += md.len();
+            progress(&format!("Exporting {}", sel.real_path), done_bytes, total_bytes);
             sessions_meta.push(SessionInfo {
                 id: id.clone(),
                 title: session_title_from_jsonl(&src).unwrap_or_default(),
@@ -486,18 +535,8 @@ pub fn export_projects<F: FnMut(&str, u64, u64)>(
         }
 
         if sel.include_files {
-            let root = Path::new(&sel.real_path);
-            for entry in WalkDir::new(root).into_iter().flatten() {
-                if !entry.file_type().is_file() {
-                    continue;
-                }
-                let rel = entry.path().strip_prefix(root).unwrap();
-                if is_excluded(rel, exclusions) {
-                    continue;
-                }
-                let rel_fwd = rel.to_string_lossy().replace('\\', "/");
-                let mtime = entry
-                    .metadata()
+            for (path, rel_fwd, size) in &project_files[i] {
+                let mtime = fs::metadata(path)
                     .ok()
                     .and_then(|m| m.modified().ok())
                     .and_then(|t| zip::DateTime::try_from(time::OffsetDateTime::from(t)).ok());
@@ -507,7 +546,9 @@ pub fn export_projects<F: FnMut(&str, u64, u64)>(
                 }
                 zip.start_file(format!("files/{}/{}", sel.slug, rel_fwd), fopts)
                     .map_err(io::Error::other)?;
-                io::copy(&mut fs::File::open(entry.path())?, &mut zip)?;
+                io::copy(&mut fs::File::open(path)?, &mut zip)?;
+                done_bytes += size;
+                progress(&format!("Exporting {}", sel.real_path), done_bytes, total_bytes);
             }
         }
 
@@ -532,6 +573,8 @@ pub fn export_projects<F: FnMut(&str, u64, u64)>(
         }
         zip.start_file(format!("config/{rel}"), opts).map_err(io::Error::other)?;
         io::copy(&mut fs::File::open(&src)?, &mut zip)?;
+        done_bytes += fs::metadata(&src).map(|m| m.len()).unwrap_or(0);
+        progress("Exporting configuration", done_bytes, total_bytes);
         config_included.push(rel.clone());
     }
 
@@ -545,7 +588,7 @@ pub fn export_projects<F: FnMut(&str, u64, u64)>(
     zip.start_file("manifest.json", opts).map_err(io::Error::other)?;
     zip.write_all(serde_json::to_string_pretty(&manifest)?.as_bytes())?;
     zip.finish().map_err(io::Error::other)?;
-    progress("Done", total, total);
+    progress("Done", total_bytes, total_bytes);
     Ok(())
 }
 
@@ -667,12 +710,40 @@ pub fn import_projects<F: FnMut(&str, u64, u64)>(
         })
         .unwrap_or_default();
 
-    let total = resolutions.len() as u64;
-    for (idx, res) in resolutions.iter().enumerate() {
+    // pre-pase: bytes totales a procesar (chats + archivos + config) para
+    // dar progreso real en bytes; los saltados también cuentan como avance
+    let mut total_bytes = 0u64;
+    for res in resolutions {
         let Some(mp) = manifest.projects.iter().find(|p| p.slug == res.slug) else {
             continue;
         };
-        progress(&format!("Importing {}", res.target_path), idx as u64, total);
+        if res.import_chats {
+            total_bytes += mp.sessions.iter().map(|s| s.size).sum::<u64>();
+        }
+        if res.import_files && mp.includes_files {
+            let prefix = format!("files/{}/", mp.slug);
+            for i in 0..archive.len() {
+                let entry = archive.by_index(i).map_err(io::Error::other)?;
+                if entry.name().starts_with(&prefix) {
+                    total_bytes += entry.size();
+                }
+            }
+        }
+    }
+    for rel in &config.rel_paths {
+        if CONFIG_FILES.contains(&rel.as_str()) {
+            if let Ok(entry) = archive.by_name(&format!("config/{rel}")) {
+                total_bytes += entry.size();
+            }
+        }
+    }
+    let mut done_bytes = 0u64;
+
+    for res in resolutions.iter() {
+        let Some(mp) = manifest.projects.iter().find(|p| p.slug == res.slug) else {
+            continue;
+        };
+        progress(&format!("Importing {}", res.target_path), done_bytes, total_bytes);
 
         let remap = |content: &str| {
             remap_all(content, &mp.real_path, &res.target_path, &manifest.source_home, target_home)
@@ -686,6 +757,8 @@ pub fn import_projects<F: FnMut(&str, u64, u64)>(
                 let dest = chat_dir.join(format!("{}.jsonl", s.id));
                 if dest.exists() && res.session_mode != "overwrite" {
                     summary.sessions_skipped += 1;
+                    done_bytes += s.size;
+                    progress(&format!("Importing {}", res.target_path), done_bytes, total_bytes);
                     continue;
                 }
                 let mut entry = archive
@@ -695,6 +768,8 @@ pub fn import_projects<F: FnMut(&str, u64, u64)>(
                 entry.read_to_string(&mut content)?;
                 fs::write(&dest, remap(&content))?;
                 summary.sessions_imported += 1;
+                done_bytes += s.size;
+                progress(&format!("Importing {}", res.target_path), done_bytes, total_bytes);
             }
 
             // history remapeado, sin duplicar sessionId
@@ -732,6 +807,7 @@ pub fn import_projects<F: FnMut(&str, u64, u64)>(
                 if rel.is_empty() || rel.contains("..") {
                     continue;
                 }
+                let entry_size = entry.size();
                 let dest = root.join(rel.replace('/', "\\"));
                 if res.only_newer && dest.exists() {
                     let local_mtime = fs::metadata(&dest)
@@ -746,6 +822,8 @@ pub fn import_projects<F: FnMut(&str, u64, u64)>(
                         .unwrap_or(i64::MAX);
                     if zip_mtime <= local_mtime {
                         summary.files_skipped += 1;
+                        done_bytes += entry_size;
+                        progress(&format!("Importing {}", res.target_path), done_bytes, total_bytes);
                         continue;
                     }
                 }
@@ -754,6 +832,8 @@ pub fn import_projects<F: FnMut(&str, u64, u64)>(
                 }
                 io::copy(&mut entry, &mut fs::File::create(&dest)?)?;
                 summary.files_written += 1;
+                done_bytes += entry_size;
+                progress(&format!("Importing {}", res.target_path), done_bytes, total_bytes);
             }
         }
 
@@ -786,9 +866,11 @@ pub fn import_projects<F: FnMut(&str, u64, u64)>(
         }
         fs::write(&dest, remapped)?;
         summary.config_written += 1;
+        done_bytes += content.len() as u64;
+        progress("Importing configuration", done_bytes, total_bytes);
     }
 
-    progress("Done", total, total);
+    progress("Done", total_bytes, total_bytes);
     Ok(summary)
 }
 
@@ -922,6 +1004,7 @@ mod tests {
         let cfg = list_config(&src_claude);
         assert!(cfg.iter().any(|c| c.rel_path == "settings.json"));
         assert!(!cfg.iter().any(|c| c.rel_path == ".credentials.json"), "credentials en lista blanca");
+        let mut prog: Vec<(u64, u64)> = Vec::new();
         export_projects(
             &src_claude,
             src_home.to_str().unwrap(),
@@ -929,9 +1012,15 @@ mod tests {
             &["node_modules".into()],
             &["settings.json".into(), ".credentials.json".into()], // el 2º debe ignorarse
             &zip_path,
-            |_, _, _| {},
+            |_, cur, tot| prog.push((cur, tot)),
         )
         .unwrap();
+        // progreso en bytes: total fijo > 0, monotónico, termina en total
+        let tot = prog[0].1;
+        assert!(tot > 0);
+        assert!(prog.iter().all(|p| p.1 == tot));
+        assert!(prog.windows(2).all(|w| w[0].0 <= w[1].0));
+        assert_eq!(*prog.last().unwrap(), (tot, tot));
 
         // PC destino simulado (otro home)
         let dst_home = tmp.join("dst-home");
@@ -961,15 +1050,21 @@ mod tests {
             rel_paths: vec!["settings.json".into()],
             backup_existing: false,
         };
+        let mut iprog: Vec<(u64, u64)> = Vec::new();
         let summary = import_projects(
             &zip_path,
             &dst_claude,
             dst_home.to_str().unwrap(),
             &[res.clone()],
             &cfg_res,
-            |_, _, _| {},
+            |_, cur, tot| iprog.push((cur, tot)),
         )
         .unwrap();
+        let itot = iprog[0].1;
+        assert!(itot > 0);
+        assert!(iprog.iter().all(|p| p.1 == itot));
+        assert!(iprog.windows(2).all(|w| w[0].0 <= w[1].0));
+        assert_eq!(*iprog.last().unwrap(), (itot, itot));
         assert_eq!(summary.sessions_imported, 1);
         assert_eq!(summary.files_written, 1);
         assert_eq!(summary.history_lines_added, 1);
@@ -1046,7 +1141,9 @@ mod tests {
         let claude = Path::new(&home).join(".claude");
         assert!(claude.is_dir(), "no hay ~/.claude en este PC");
 
-        let projects = list_projects(&claude).unwrap();
+        let excl: Vec<String> =
+            ["node_modules", ".git", "target", "venv"].iter().map(|s| s.to_string()).collect();
+        let projects = list_projects(&claude, &excl).unwrap();
         assert!(!projects.is_empty());
         // proyecto más pequeño con carpeta existente, para que el test sea rápido
         let p = projects
@@ -1123,7 +1220,7 @@ mod tests {
             );
         }
         // los proyectos importados aparecen al listar en el PC destino
-        let dst_projects = list_projects(&dst_claude).unwrap();
+        let dst_projects = list_projects(&dst_claude, &excl).unwrap();
         assert_eq!(dst_projects.len(), 1);
         assert_eq!(dst_projects[0].real_path, pp.suggested_target_path);
 
