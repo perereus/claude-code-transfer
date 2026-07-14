@@ -10,6 +10,8 @@ user is different, so your sessions keep working.
 ![Platform: Windows](https://img.shields.io/badge/Platform-Windows-2e2923.svg)
 ![Built with Tauri](https://img.shields.io/badge/Built%20with-Tauri%20v2-24C8DB.svg)
 
+![Claude Code Transfer](docs/screenshot.png)
+
 ## Why
 
 Claude Code stores each project's conversations under `~/.claude/projects/<slug>/`
