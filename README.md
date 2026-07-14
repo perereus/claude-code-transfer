@@ -1,10 +1,10 @@
 # Claude Code Transfer
 
-A desktop app (Windows) to **transfer or back up your Claude Code chats and their
-project files** — no cloud, no online sync. Export a single `.cctx` package,
-carry it however you like (USB, LAN share, whatever), and import it wherever you
-need. Paths are remapped automatically when the Windows user is different, so
-your sessions keep working.
+A desktop app (Windows, macOS on Apple Silicon) to **transfer or back up your
+Claude Code chats and their project files** — no cloud, no online sync. Export
+a single `.cctx` package, carry it however you like (USB, LAN share, whatever),
+and import it wherever you need. Paths are remapped automatically when the
+user or OS is different, so your sessions keep working.
 
 It works two ways:
 
@@ -16,7 +16,7 @@ It works two ways:
   portable, offline backup you fully control.
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-d97757.svg)
-![Platform: Windows](https://img.shields.io/badge/Platform-Windows-2e2923.svg)
+![Platform: Windows & macOS](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20(Apple%20Silicon)-2e2923.svg)
 ![Built with Tauri](https://img.shields.io/badge/Built%20with-Tauri%20v2-24C8DB.svg)
 
 ![Claude Code Transfer](docs/screenshot.png)
@@ -52,6 +52,7 @@ you — whether you're moving to another PC or just saving a snapshot to restore
 
 Download the latest build from the [Releases](../../releases) page:
 
+**Windows**
 - **`Claude Code Transfer_x.y.z_x64-setup.exe`** — NSIS installer (recommended).
 - **`Claude Code Transfer_x.y.z_x64_en-US.msi`** — MSI installer (for silent /
   enterprise deployment).
@@ -59,6 +60,15 @@ Download the latest build from the [Releases](../../releases) page:
 
 > The app is unsigned, so Windows SmartScreen may warn on first launch — click
 > *More info → Run anyway*. This is normal for apps without a code-signing cert.
+
+**macOS (Apple Silicon)**
+- **`Claude Code Transfer_x.y.z_aarch64.dmg`** — open it and drag the app to
+  `Applications`. Built automatically by GitHub Actions on a native M-series
+  runner; only arm64 (M1 and later) is built, no Intel Mac support.
+
+> The app isn't notarized (no Apple Developer account behind this project), so
+> Gatekeeper will refuse to open it with a plain double-click. Right-click the
+> app → *Open* → *Open* in the dialog, once. After that it launches normally.
 
 ## Usage
 

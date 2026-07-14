@@ -239,11 +239,15 @@ pub fn remap_all(content: &str, project_from: &str, project_to: &str, home_from:
 
 /// Ruta destino sugerida: si la ruta origen cuelga del home origen, la misma
 /// ruta relativa bajo el home local; si no, la ruta tal cual.
+/// Normaliza `\`/`/` al separador nativo para que funcione igual en Windows
+/// y macOS/Linux (incluido el caso de un `.cctx` exportado en un SO distinto).
 pub fn suggest_target_path(source_path: &str, source_home: &str, target_home: &str) -> String {
-    let fwd_src = source_path.replace('/', "\\");
-    let fwd_home = source_home.replace('/', "\\");
-    if let Some(rest) = fwd_src.strip_prefix(&fwd_home) {
-        format!("{}{}", target_home.trim_end_matches('\\'), rest)
+    let sep = std::path::MAIN_SEPARATOR;
+    let norm = |s: &str| s.replace(['\\', '/'], &sep.to_string());
+    let norm_src = norm(source_path);
+    let norm_home = norm(source_home);
+    if let Some(rest) = norm_src.strip_prefix(&norm_home) {
+        format!("{}{}", norm(target_home).trim_end_matches(sep), rest)
     } else {
         source_path.to_string()
     }
@@ -808,7 +812,9 @@ pub fn import_projects<F: FnMut(&str, u64, u64)>(
                     continue;
                 }
                 let entry_size = entry.size();
-                let dest = root.join(rel.replace('/', "\\"));
+                // las entradas del zip siempre usan `/`; Path las acepta tal
+                // cual en Windows y en macOS/Linux, no hace falta convertir
+                let dest = root.join(&rel);
                 if res.only_newer && dest.exists() {
                     let local_mtime = fs::metadata(&dest)
                         .ok()
