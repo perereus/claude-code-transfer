@@ -1,10 +1,19 @@
 # Claude Code Transfer
 
-A desktop app (Windows) to copy your **Claude Code chats and their project files**
-from one PC to another — no cloud, no online sync. Export a single `.cctx`
-package on one machine, carry it however you like (USB, LAN share, whatever),
-and import it on another. Paths are remapped automatically when the Windows
-user is different, so your sessions keep working.
+A desktop app (Windows) to **transfer or back up your Claude Code chats and their
+project files** — no cloud, no online sync. Export a single `.cctx` package,
+carry it however you like (USB, LAN share, whatever), and import it wherever you
+need. Paths are remapped automatically when the Windows user is different, so
+your sessions keep working.
+
+It works two ways:
+
+- **Transfer** — move your work between PCs and pick up where you left off on
+  another machine.
+- **Backup & restore** — keep a dated `.cctx` snapshot of your chats, project
+  files and global config; restore it later on the same or a different PC.
+  Because the `.cctx` is a plain ZIP with everything self-contained, it's a
+  portable, offline backup you fully control.
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-d97757.svg)
 ![Platform: Windows](https://img.shields.io/badge/Platform-Windows-2e2923.svg)
@@ -15,12 +24,15 @@ user is different, so your sessions keep working.
 ## Why
 
 Claude Code stores each project's conversations under `~/.claude/projects/<slug>/`
-and the actual code lives in the project folder. Moving between machines by hand
+and the actual code lives in the project folder. Moving or backing them up by hand
 means copying scattered `.jsonl` files, fixing absolute paths inside them, and
 hoping nothing breaks. This app does it in two clicks and rewrites the paths for
-you.
+you — whether you're moving to another PC or just saving a snapshot to restore later.
 
 ## Features
+
+- **Transfer *and* backup** — the same export is a portable backup: save a dated
+  `.cctx` snapshot and restore it any time, on the same or a different machine.
 
 - **Pick what you move** — all projects, some projects, or individual sessions.
 - **Project files included** (optional, per project) with configurable exclusions
@@ -57,6 +69,11 @@ Download the latest build from the [Releases](../../releases) page:
 3. **Import** (destination PC): open the file, review the conflicts it detects
    (sessions or folders that already exist), pick merge/overwrite and the target
    path per project, then import.
+
+**As a backup:** export everything to a dated `.cctx` and store it somewhere safe.
+To restore, import it — on the same PC (paths stay put) or a new one (paths are
+remapped). *Merge* keeps existing sessions and only adds missing ones; *overwrite*
+restores the snapshot's version.
 
 ## What's inside a `.cctx`
 
